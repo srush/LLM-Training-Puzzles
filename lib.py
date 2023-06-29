@@ -323,8 +323,10 @@ class Model:
             length = len(batches)
         if typ in ["update"]:
             length = 0.5
-        if typ in ["allreduce", "scatterreduce"]:
-            length = 1
+        if typ in ["allreduce", "scatterreduce", "allgather"]:
+            length = 0.3
+        if typ in ["pass"]:
+            length = 0.2
 
         self.log.append(Event(typ, layer, self.rank, self.time, length, self.memory(), batches))
         self.time += length
@@ -400,18 +402,19 @@ class Model:
         self.event("scatterreduce", layer)
         return v
 
-    async def allgather(self, v: O) -> O:
-        self.event("allgather", None)
+    async def allgather(self, v: O, layer:int) -> O:
         v, self.time = await self.dist.allgather(self.rank, v, self.time)
-        self.event("allgather", None)
+        self.event("allgather", layer)
         return v
 
     async def pass_to(self, rank: int, v: Any) -> None:
+        self.event("pass", None)
         await self.dist.pass_to(rank, (v, self.time))
 
     async def receive(self) -> Any:
         v, time = await self.dist.receive(self.rank)
         self.time = max(time, self.time)
+        self.event("pass", None)
         return v
 
     @staticmethod

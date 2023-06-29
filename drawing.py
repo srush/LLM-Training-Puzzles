@@ -16,7 +16,7 @@ def draw(models : Sequence[Model]) -> Diagram:
         PAD = 0.2
         return (
             (
-                rectangle(length * TIME -0.5, 0.9).line_width(0)
+                rectangle(length * TIME - 0.05, 0.9).line_width(0)
                 + text(s, 0.9)
                 .translate(0, 0.1)
                 .line_width(0.05)
@@ -27,7 +27,7 @@ def draw(models : Sequence[Model]) -> Diagram:
         )
 
     def draw_forward(e):
-        return square(e.layer, e.time, e.length, ",".join(map(str, e.batches))).fill_color(
+        return square(e.layer, e.time, e.length, " ".join(map(str, e.batches))).fill_color(
             forward_col[e.layer]
         )
 
@@ -43,6 +43,8 @@ def draw(models : Sequence[Model]) -> Diagram:
 
     def draw_allred(e):
         return square(e.layer, e.time, e.length).fill_color(forward_col[e.layer]).fill_opacity(0.5)
+    def draw_pass(e):
+        return square(0, e.time, e.length).fill_color(Color("grey")).fill_opacity(0.5)
 
     rows = []
 
@@ -65,8 +67,10 @@ def draw(models : Sequence[Model]) -> Diagram:
                 d += draw_backward(e)
             if e.typ == "update":
                 d += draw_update(e)
-            if e.typ in ["allreduce", "scatterreduce"]:
+            if e.typ in ["allreduce", "scatterreduce", "allgather"]:
                 d += draw_allred(e)
+            if e.typ in ["pass"]:
+                d += draw_pass(e)
         rows.append(d)
     d = vcat(rows)
 
@@ -78,7 +82,7 @@ def draw(models : Sequence[Model]) -> Diagram:
         ).translate(-TIME, 0).fill_color(Color("grey"))
         for e in models[gpu].log:
             can = (
-                rectangle(TIME, e.memory / 100.0)
+                rectangle(TIME * e.length, e.memory / 100.0)
                 .align_b()
                 .align_l()
                 .fill_color(Color("black"))

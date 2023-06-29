@@ -216,6 +216,7 @@ def grad_accum(model: Model) -> Model:
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.load_weights(l)
 
+    ## USER CODE
     for r in range(model.BATCHES):
         # Load the input layer activations
         activations[0, r] = model.get_activation([r])
@@ -245,7 +246,7 @@ def grad_accum(model: Model) -> Model:
             model.update(l, 
                         grad_weights[l, 0], weights[l], opt_states[l])
 
-    ## User Code
+    ## END USER CODE
     for l in range(model.LAYERS):
         model.set_final_weight(l, weights[l])
     return model
@@ -294,9 +295,14 @@ out_weight_grads = await asyncio.gather(*[
 out_weight_grads[0]
 
 # %% [markdown]
+# Note: When running communication operations like AllReduce on a GPU, the communication happens in parallel to the computation on that GPU. That means the API for AllReduce does not block, and allows the model to continue running while waiting for this command to run. This means it is beneficial to run AllReduce (and other communication) as early as possible so that other compute can be run during the reduction. 
+#
+# We will ignore this in these puzzles and represent communication as happening efficiently.
+
+# %% [markdown]
 # ### Puzzle 2 - Distributed Data Parallel
 #
-# Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update.
+# Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update. The main benefit of this approach is compute efficiency over gradient accumulation.
 
 # %%
 async def ddp(model: Model) -> Model:
@@ -304,6 +310,8 @@ async def ddp(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
     # Load all the activations
     model.activations[0] = model.get_activation([model.rank])
+
+    ## USER CODE
 
     # Load in the full weights
     for l in range(model.LAYERS):
@@ -327,6 +335,8 @@ async def ddp(model: Model) -> Model:
         grad_weights[l] = await model.allreduce(grad_weights[l], l)
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
         model.set_final_weight(l, weights[l])
+    ## END USER CODE
+
     return model
 
 
@@ -363,7 +373,7 @@ weights[0].combine(weights[2])
 # Use allgather to collect the shards from all machines.
 async def mygather(model: Model) -> WeightGrad:
     # Allreduce sums together all the weight grads
-    return await model.allgather(weights[model.rank])
+    return await model.allgather(weights[model.rank], 0)
 
 dist = Dist(ranks)
 out_weights = await asyncio.gather(*[
@@ -372,13 +382,9 @@ out_weights = await asyncio.gather(*[
 out_weights[0]
 
 # %% [markdown]
-#
-
-# %% [markdown]
 # ### Puzzle 3: Weight-Sharded Data Parallel
 #
-# Rajbhandari, S., Rasley, J., Ruwase, O., and He,
-# Y. Zero: Memory optimizations toward training trillion parameter models, 2019.
+# Run a model that shards each layer weight over all the machines. Reconstruct the layer weight at each layer using allgather. Finally update the weights on each machine using allreduce.
 
 # %%
 async def wsdp(model: Model) -> Model:
@@ -392,9 +398,10 @@ async def wsdp(model: Model) -> Model:
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.load_weights(l, model.rank, model.RANKS) 
 
+    ## USER CODE
     # Forward
     for l in range(model.LAYERS):        
-        weights[l, 0] = await model.allgather(weights[l])
+        weights[l, 0] = await model.allgather(weights[l], l)
         activations[l + 1] = model.forward(l, activations[l], weights[l, 0])
         del weights[l, 0]
 
@@ -402,7 +409,7 @@ async def wsdp(model: Model) -> Model:
     grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
 
     for l in range(model.LAYERS - 1, -1, -1):
-        weights[l, 0] = await model.allgather(weights[l])
+        weights[l, 0] = await model.allgather(weights[l], l)
         grad_weights[l], grad_activations[l] = model.backward(
             l, activations[l], grad_activations[l + 1], weights[l, 0]
         )
@@ -413,6 +420,8 @@ async def wsdp(model: Model) -> Model:
         grad_weights[l] = await model.allreduce(grad_weights[l], l)
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
         model.set_final_weight(l, weights[l])
+
+    ## END USER CODE
     return model
 
 # %%
@@ -473,9 +482,10 @@ async def fsdp(model: Model) -> Model:
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.load_weights(l, model.rank, model.RANKS) 
 
+    ## USER CODE
     # Forward
     for l in range(model.LAYERS):        
-        weights[l, 0] = await model.allgather(weights[l])
+        weights[l, 0] = await model.allgather(weights[l], l)
         activations[l + 1] = model.forward(l, activations[l], weights[l, 0])
         del weights[l, 0]
 
@@ -483,7 +493,7 @@ async def fsdp(model: Model) -> Model:
     grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
 
     for l in range(model.LAYERS - 1, -1, -1):
-        weights[l, 0] = await model.allgather(weights[l])
+        weights[l, 0] = await model.allgather(weights[l], l)
         grad_weights[l], grad_activations[l] = model.backward(
             l, activations[l], grad_activations[l + 1], weights[l, 0]
         )
@@ -494,10 +504,10 @@ async def fsdp(model: Model) -> Model:
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
         model.set_final_weight(l, weights[l])
+        
+    ## END USER CODE
     return model
 
-
-# %%
 
 # %%
 dist = Dist(ranks)
@@ -514,6 +524,8 @@ model.check(out)
 
 # %% [markdown]
 # ## Communication: Point-to-Point
+#
+# An alternative approach to communication is to directly communicate specific information between GPUs. In our model, both GPUs talking to each other block and wait for the handoff. 
 
 # %%
 async def talk(model: Model) -> None:
@@ -534,6 +546,8 @@ result = await asyncio.gather(*[
 
 # %% [markdown]
 # ### Puzzle 5: Pipeline Parallelism
+#
+# Split the layer weights and optimizers equally between GPUs. Have each GPU handle only its layer. Pass the full set of batches for activations and grad_activations between layers using p2p communication. No need for any global communication.
 
 # %%
 async def pipeline(model: Model) -> Model:
@@ -542,6 +556,7 @@ async def pipeline(model: Model) -> Model:
     my_layers = list([l + (model.rank * per_rank) for l in range(per_rank)])
     for l in my_layers:
         weights[l], opt_states[l] = model.load_weights(l)
+    ## USER CODE
 
     if model.rank == 0:
         activations[0] = model.get_activation(range(model.BATCHES))
@@ -574,6 +589,8 @@ async def pipeline(model: Model) -> Model:
     for l in my_layers:
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
         model.set_final_weight(l, weights[l])
+    ## END USER CODE
+
     return model
 
 
@@ -591,7 +608,11 @@ draw(out)
 model.check(out)
 
 # %% [markdown]
-# ## Puzzle 6: GPipe
+# ### Puzzle 6: GPipe Schedule
+#
+# A major issue with the pipeline approach is that it causes a "bubble", i.e. time in the later layers waiting for the earlier layers to complete. An alternative approach is to split the batches smaller so you can pass them earlier. 
+#
+# In this puzzle, you should run each batch by itself, and then pass. The graph should look similar as the one above but with a smaller bubble. 
 
 # %%
 async def gpipe(model: Model) -> Model:
@@ -601,6 +622,7 @@ async def gpipe(model: Model) -> Model:
     for l in my_layers:
         weights[l], opt_states[l] = model.load_weights(l)
 
+    # USER CODE
     for mb in range(model.BATCHES):
         # Forward
         if model.rank == 0:
@@ -641,6 +663,7 @@ async def gpipe(model: Model) -> Model:
             del grad_weights[l, mb]
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
         model.set_final_weight(l, weights[l])
+    ## END USER CODE
     return model
 
 
@@ -660,16 +683,20 @@ model.check(out)
 
 # %% [markdown]
 # ### Puzzle 7: Pipeline + FSDP
+#
+# As a last exercise, we can put everything together. Here we are going to run a combination of pipeline parallelism while also sharding our weight between 16 different machines. Here the model only has 4 layers, so we will assign 4 GPUs to each layer in the pipeline parallel approach. 
+#
+# This example requires combining both collective communication and p2p communication effectively. 
 
 # %%
 async def pipeline_fsdp(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
     per_rank = model.LAYERS // (model.RANKS // 4)
     my_layers = list([l + ((model.rank % 4)  * per_rank) for l in range(per_rank)])
-    print(my_layers)
     for l in range(model.LAYERS):
         weights[l, 0], opt_states[l, 0] = model.load_weights(l, model.rank, model.RANKS)
-
+    def empty_grad(l):
+        return model.fake_grad(l, [])
 
     # Forward
     for l in range(model.LAYERS):        
@@ -679,7 +706,7 @@ async def pipeline_fsdp(model: Model) -> Model:
             else:
                 activations[l] = await model.receive()
     
-        weights[l] = await model.allgather(weights[l, 0])
+        weights[l] = await model.allgather(weights[l, 0], l)
         if l in my_layers:
             activations[l + 1] = model.forward(l, activations[l], weights[l])
         del weights[l]
@@ -697,7 +724,7 @@ async def pipeline_fsdp(model: Model) -> Model:
             if model.rank % 4 != 3:
                 grad_activations[l + 1] = await model.receive()
     
-        weights[l] = await model.allgather(weights[l, 0])
+        weights[l] = await model.allgather(weights[l, 0], l)
         if l in my_layers:
             grad_weights[l], grad_activations[l] = model.backward(
                 l, activations[l], grad_activations[l + 1], model.weights[l]
@@ -705,7 +732,7 @@ async def pipeline_fsdp(model: Model) -> Model:
             del grad_activations[l + 1], activations[l]
             grad_weights[l] = await model.scatterreduce(grad_weights[l], l)
         else:
-            grad_weights[l] = await model.scatterreduce(WeightGrad(l, model.LAYERS, frozenset(), model.BATCHES), l)
+            grad_weights[l] = await model.scatterreduce(empty_grad(l), l)
         del weights[l]
 
         if model.rank % 4 != 0 and l == my_layers[0]:
@@ -720,13 +747,13 @@ async def pipeline_fsdp(model: Model) -> Model:
 # %%
 dist = Dist(16)
 out = await asyncio.gather(*[
-    pipeline_fsdp(Model(layers=8, batches=ranks, rank=i, dist=dist))
+    pipeline_fsdp(Model(layers=4, batches=ranks, rank=i, dist=dist))
     for i in range(16)])
 
 
 # %%
 model.check(out)
 chalk.set_svg_height(1000)
-chalk.set_svg_draw_height(1000)
+chalk.set_svg_draw_height(1000) 
 
 draw(out)
