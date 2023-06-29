@@ -22,7 +22,7 @@ from chalk import vcat
 import asyncio
 import chalk
 chalk.set_svg_height(400)
-chalk.set_svg_draw_height(500)
+chalk.set_svg_draw_height(600)
 
 # %% [markdown]
 # # Distributed Training Puzzles
@@ -194,14 +194,16 @@ draw_group(out.final_weights)
 
 
 # %%
-Model.check([out])
+draw([out])
 
 # %%
-draw([out])
+Model.check([out])
 
 
 # %% [markdown]
 # ### Puzzle 1 - Gradient Accumulation
+#
+# For this puzzle, the goal is to reduce max memory usage. To do so you are going to run on each batch individually instead of all together. 
 #
 # Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update.
 
@@ -255,14 +257,23 @@ out = grad_accum(Model(layers=2, batches=4, rank=0, dist=Dist(1)))
 draw_group(out.final_weights)
 
 # %%
+draw([out])
+
+# %%
 model.check([out])
 
-# %%
+# %% [markdown]
+# ## Communications: AllReduce
 
 # %% [markdown]
-# ## AllReduce
-
-# %%
+# When working with multiple GPUs we need to have communication. 
+# The primary communication primitives for GPUs are implemented in NCCL. 
+#
+# https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/operations.html
+#
+# We are not going to use these directly, but simulate them using Python and asyncio. 
+#
+# The first operation is AllReduce. We will have 4 GPUs (ranks=4) and use them each to compute a batch of weight grads.
 
 # %%
 ranks = 4
@@ -270,13 +281,15 @@ weight_grads = [WeightGrad(0, 1, {i}, ranks) for i in range(ranks)]
 weight_grads[0] + weight_grads[1] + weight_grads[2] + weight_grads[3]
 
 # %%
-async def reduce(model: Model) -> WeightGrad:
-    # Allreduce sums together all the weight grads
+# Simple asynchronous function that calls allreduce to sum the weight grads at layer 0
+async def myfunc(model: Model) -> WeightGrad:
     return await model.allreduce(weight_grads[model.rank], 0)
 
+# %%
+# This code uses asyncio to run the above function on 4 "GPUs" .
 dist = Dist(ranks)
 out_weight_grads = await asyncio.gather(*[
-    reduce(Model(layers=1, batches=1, rank=i, dist=dist))
+    myfunc(Model(layers=1, batches=1, rank=i, dist=dist))
     for i in range(ranks)])
 out_weight_grads[0]
 
@@ -325,21 +338,29 @@ out = await asyncio.gather(*[
 draw_group(out[0].final_weights)
 
 # %%
+draw(out)
+
+# %%
 model.check(out)
 
 # %% [markdown]
-# ## Communication: Allgather Sharding
+# ## Communication: AllGather / Sharding
+#
+# Our next primitive is AllGather. This allows us to communicate "shards" of an object stored on different GPUs to all the GPUs.
 
 # %%
+# Load only part of a weights.
 model = Model(layers=2, batches=1, rank=0, dist=Dist(1))
 weight, _ = model.load_weights(0, shard=0, total=4)
 weight
 
 # %%
+# Combine togegher two shards on one machine.
 weights = [model.load_weights(0, shard=i, total=ranks)[0] for i in range(ranks)]
 weights[0].combine(weights[2])
 
 # %%
+# Use allgather to collect the shards from all machines.
 async def mygather(model: Model) -> WeightGrad:
     # Allreduce sums together all the weight grads
     return await model.allgather(weights[model.rank])
@@ -400,6 +421,9 @@ out = await asyncio.gather(*[
     wsdp(Model(layers=2, batches=ranks, rank=i, dist=dist))
     for i in range(ranks)])
 draw_group(out[1].final_weights)
+
+# %%
+draw(out)
 
 # %%
 model.check(out)
@@ -483,6 +507,9 @@ out = await asyncio.gather(*[
 draw_group(out[1].final_weights)
 
 # %%
+draw(out)
+
+# %%
 model.check(out)
 
 # %% [markdown]
@@ -557,6 +584,12 @@ out = await asyncio.gather(*[
     for i in range(ranks)])
 draw_group(out[1].final_weights)
 
+# %%
+draw(out)
+
+# %%
+model.check(out)
+
 # %% [markdown]
 # ## Puzzle 6: GPipe
 
@@ -619,8 +652,11 @@ out = await asyncio.gather(*[
 draw_group(out[1].final_weights)
 
 # %%
-model.check(out)
 draw(out)
+
+# %%
+model.check(out)
+
 
 # %% [markdown]
 # ### Puzzle 7: Pipeline + FSDP
@@ -692,54 +728,3 @@ chalk.set_svg_height(1000)
 chalk.set_svg_draw_height(1000)
 
 draw(out)
-
-# %%
-async def run() -> None:
-    model1 = [basic(Model(0, Dist(1), layers=6, batches=2))]
-    Model.check(model1)
-
-    async def main2() -> List[Model]:
-        ranks = 2
-        dist = Dist(ranks)
-        return await asyncio.gather(
-            *[ddp(Model(rank, dist, layers=6, batches=2)) for rank in range(ranks)]
-        )
-
-    model2 = await main2()
-    Model.check(model2)
-
-    async def main3() -> List[Model]:
-        ranks = 4
-        dist = Dist(ranks)
-        return await asyncio.gather(
-            *[pipeline(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
-        )
-
-    model3 = await main3()
-    Model.check(model3)
-
-    async def main4() -> List[Model]:
-        ranks = 4
-        dist = Dist(ranks)
-        return await asyncio.gather(
-            *[gpipe(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
-        )
-
-    model4 = await main4()
-    Model.check(model4)
-
-    async def main5() -> List[Model]:
-        ranks = 2
-        dist = Dist(ranks)
-        return await asyncio.gather(
-            *[fsdp(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
-        )
-
-    model5 = await main5()
-    Model.check(model5)
-
-
-    vcat([draw(model1), draw(model2), draw(model3), draw(model4)], 0.1).render_svg(
-        "out2.svg", 500
-    )
-
