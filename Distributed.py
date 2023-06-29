@@ -502,7 +502,7 @@ async def fsdp(model: Model) -> Model:
 # %%
 dist = Dist(ranks)
 out = await asyncio.gather(*[
-    fsdp(Model(layers=2, batches=ranks, rank=i, dist=dist))
+    fsdp(Model(layers=6, batches=ranks, rank=i, dist=dist))
     for i in range(ranks)])
 draw_group(out[1].final_weights)
 
@@ -707,11 +707,13 @@ async def pipeline_fsdp(model: Model) -> Model:
         else:
             grad_weights[l] = await model.scatterreduce(WeightGrad(l, model.LAYERS, frozenset(), model.BATCHES), l)
         del weights[l]
-        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l, 0], opt_states[l, 0])
-        model.set_final_weight(l, weights[l])
 
         if model.rank % 4 != 0 and l == my_layers[0]:
             await model.pass_to(model.rank - 1, grad_activations[l])
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l, 0], opt_states[l, 0])
+        model.set_final_weight(l, weights[l])
+
     # Update
     return model
 

@@ -282,6 +282,7 @@ class Event:
     layer: Optional[int]
     rank: int
     time: int
+    length: int
     memory: int
     batches: FrozenSet[int] = frozenset()
 
@@ -315,10 +316,18 @@ class Model:
         return mem
 
     def event(self, typ: str, layer: Optional[int]=None, batches: FrozenSet[int]=frozenset({})) -> None:
-        self.log.append(Event(typ, layer, self.rank, self.time, self.memory(), batches))
-        if typ not in  ["loss", "allgather"]:
-            self.time += 1
+        length = 0
+        if typ in  ["loss", "allgather"]:
+            length = 0
+        if typ in ["forward", "backward"]:
+            length = len(batches)
+        if typ in ["update"]:
+            length = 0.5
+        if typ in ["allreduce", "scatterreduce"]:
+            length = 1
 
+        self.log.append(Event(typ, layer, self.rank, self.time, length, self.memory(), batches))
+        self.time += length
     def load_weights(self, layer: int, shard: int = 0, total:int = 1 ) -> Tuple[Weight, OptState]:
         return Weight(layer, self.LAYERS, 0, frozenset([shard]), total),\
               OptState(layer, self.LAYERS, 0, frozenset([shard]), total)

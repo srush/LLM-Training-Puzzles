@@ -12,12 +12,12 @@ def draw(models : Sequence[Model]) -> Diagram:
     layers = models[0].LAYERS
     forward_col = list(Color("green").range_to("red", layers + 1))
 
-    def square(layer:int, time:int, s: str="") -> Diagram:
+    def square(layer:int, time:int, length:int, s: str="") -> Diagram:
         PAD = 0.2
         return (
             (
-                rectangle(TIME * 0.92, 0.9).line_width(0)
-                + text(s, 0.9 / ((len(s) + 1)/2))
+                rectangle(length * TIME -0.5, 0.9).line_width(0)
+                + text(s, 0.9)
                 .translate(0, 0.1)
                 .line_width(0.05)
                 .fill_color(Color("black"))
@@ -27,22 +27,22 @@ def draw(models : Sequence[Model]) -> Diagram:
         )
 
     def draw_forward(e):
-        return square(e.layer, e.time, ",".join(map(str, e.batches))).fill_color(
+        return square(e.layer, e.time, e.length, ",".join(map(str, e.batches))).fill_color(
             forward_col[e.layer]
         )
 
     def draw_backward(e):
         return (
-            square(e.layer, e.time, ",".join(map(str, e.batches)))
+            square(e.layer, e.time, e.length, " ".join(map(str, e.batches)))
             .fill_color(forward_col[e.layer])
             .fill_opacity(0.2)
         )
 
-    def draw_update(layer, time):
-        return square(layer, time, "U").fill_color(Color("yellow")).fill_opacity(0.5)
+    def draw_update(e):
+        return square(e.layer, e.time, e.length, "").fill_color(Color("yellow")).fill_opacity(0.5)
 
-    def draw_allred(layer, time):
-        return square(layer, time).fill_color(forward_col[e.layer]).fill_opacity(0.5)
+    def draw_allred(e):
+        return square(e.layer, e.time, e.length).fill_color(forward_col[e.layer]).fill_opacity(0.5)
 
     rows = []
 
@@ -56,7 +56,7 @@ def draw(models : Sequence[Model]) -> Diagram:
         )
         box = box + text(str(gpu), 1).line_width(0).with_envelope(
             rectangle(TIME, 1)
-        ).translate(-TIME, 0)
+        ).translate(-TIME, 0).fill_color(Color("orange"))
         d += box
         for e in models[gpu].log:
             if e.typ == "forward":
@@ -64,16 +64,18 @@ def draw(models : Sequence[Model]) -> Diagram:
             if e.typ == "backward":
                 d += draw_backward(e)
             if e.typ == "update":
-                d += draw_update(e.layer, e.time)
+                d += draw_update(e)
             if e.typ in ["allreduce", "scatterreduce"]:
-                d += draw_allred(e.layer, e.time)
+                d += draw_allred(e)
         rows.append(d)
     d = vcat(rows)
 
     rows = []
     for gpu in range(len(models)):
         row = rectangle(TIME * (MAXTIME + 1), 1).fill_color(Color("white")).align_l()
-
+        row = row + text(str(gpu), 1).line_width(0).with_envelope(
+            rectangle(TIME, 1)
+        ).translate(-TIME, 0).fill_color(Color("grey"))
         for e in models[gpu].log:
             can = (
                 rectangle(TIME, e.memory / 100.0)
@@ -86,7 +88,7 @@ def draw(models : Sequence[Model]) -> Diagram:
     d2 = vcat(rows)
     d = vcat([d, d2])
     # return rectangle(1.5, 0.5) + d.scale_uniform_to_x(1).center_xy()
-    return rectangle(1.2, 0.7) + d.scale_uniform_to_x(1).center_xy()
+    return rectangle(1.5, 8).line_width(0) + d.scale_uniform_to_y(len(models)).center_xy()
 
 
 def draw_network(layers:int, weight: Optional[int]=None, before:int=-1, after:int=100, 
