@@ -25,11 +25,10 @@ chalk.set_svg_height(400)
 chalk.set_svg_draw_height(600)
 
 # %% [markdown]
-# # Distributed Training Puzzles
+# # LLM Training Puzzles
 #
 # by Sasha Rush (@srush_nlp)
 #
-# These puzzles are based off of the paper https://arxiv.org/abs/2211.05953b
 
 # %% [markdown]
 # ## Preliminaries
@@ -392,7 +391,7 @@ async def wsdp(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
 
     # Load all the activations
-    model.activations[0] = model.get_activation([model.rank])
+    model.activations[0] = model.get_activation([mo         del.rank])
 
     # Load a shard of the weights for every layer. Load in the full weights
     for l in range(model.LAYERS):
