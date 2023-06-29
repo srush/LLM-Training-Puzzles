@@ -14,7 +14,8 @@ I recommend running in Colab. Click here and copy the notebook to get start.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/srush/LLM-Training-Puzzles/blob/main/puzzles.ipynb)
 
-![image](https://github.com/srush/LLM-Training-Puzzles/assets/35882/08eba10a-1b16-487f-8dfa-795e0355b5d2)
+![image](https://github.com/srush/LLM-Training-Puzzles/assets/35882/6d16fc9e-3d14-4bd0-b7c7-d056e49854ac)
+
 
 
 If you are into this kind of thing, this is 6th in a series of these puzzles.
