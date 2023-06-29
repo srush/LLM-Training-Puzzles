@@ -1,157 +1,745 @@
-from lib import *
-async def basic(model):
-    model.activations[0] = model.get_activation(range(model.BATCHES))
-    model.load_weights(range(model.LAYERS))
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     custom_cell_magics: kql
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.11.2
+#   kernelspec:
+#     display_name: venv
+#     language: python
+#     name: python3
+# ---
 
+# %%
+from typing import List
+from lib import Model, Dist, WeightGrad
+from drawing import draw, draw_group
+from chalk import vcat
+import asyncio
+import chalk
+chalk.set_svg_height(400)
+chalk.set_svg_draw_height(500)
+
+# %% [markdown]
+# # Distributed Training Puzzles
+#
+# by Sasha Rush (@srush_nlp)
+#
+# These puzzles are based off of the paper https://arxiv.org/abs/2211.05953b
+
+# %% [markdown]
+# ## Preliminaries
+#
+# The goal of these puzzles is to learn about distributed training of LLMs. However, we will be primarily concerned with a speed and memory efficiency of completing a single update of the models. To make things simpler, we will abstract away from the standard tensor-based transformer model, and just consider a state-less representation of each of the components of a multi-layer neural network.
+#
+#
+
+# %%
+model = Model(layers=2, batches=4)
+weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+
+# %% [markdown]
+# Our library has 5 parts: 
+#
+# * Weights
+# * Optimizer States - Values needed to update the weights
+# * Activations - The internal values computed on the forward pass
+# * Grad Activations - The gradients of the loss wrt to activations, needed for backward pass
+# * Grad Weights - The gradients of the loss wrt to weights, needed for updates
+#
+# For these puzzles, you are *not allowed* to have local variables. You need to store each of these in the dictionary corresponding to its type.
+#
+# We begin by tracing the lifecycle of a single model update.
+
+# %%
+# Get the input activations to the model for batches 2, 3 
+activations[0] = model.get_activation(batches=[2, 3])
+activations[0]
+
+# %%
+# Load the weights (random) for layers 0 and 1
+for i in range(model.LAYERS):
+    weights[i], opt_states[i] = model.load_weights(i)
+weights[0]
+
+# %%
+# Activations can be moved forward a layer if you have the weights.
+activations[1] = model.forward(layer=0, inp=activations[0], weight=weights[0])
+activations[2] = model.forward(layer=1, inp=activations[1], weight=weights[1])
+activations[1]
+
+# %%
+# Draw all the current activations in memory.
+draw_group(activations)
+
+# %%
+# At the last layer, we can convert an activation to a grad activation by calling `loss`
+grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
+grad_activations[model.LAYERS]
+
+# %%
+# Calling `backward` requires the forward activation, the backward grad activation, and the weights.
+# It returns the grad weights and the backward activation.
+grad_weights[1], grad_activations[1] = model.backward(1, activations[1], grad_activations[2], weights[1])
+grad_weights[0], grad_activations[0] = model.backward(0, activations[0], grad_activations[1], weights[0])
+grad_activations[1]
+
+# %%
+# We can use delete to remove any memory that is not longer needed. 
+print("Before memory:", model.memory())
+del grad_activations[1]
+print("After memory:", model.memory())
+
+draw_group(grad_activations)
+
+# %%
+# Grad weights keep track of which batches they are for. Here we only have the grad weights for batches 2 and 3.
+draw_group(grad_weights)
+
+# %%
+# If we try to update with the grad weights we will get an error.
+try:
+    model.update(0, weight_grad=grad_weights[0], weight=weights[0], opt_state=opt_states[0])
+except AssertionError as e:
+    print("Error! Only have batches")
+    print(e)
+
+# %%
+# For this example, we can cheat. Pretend we had the other gradients we needed. 
+grad_weights[0, 0] = model.fake_grad(0, [0,1])
+grad_weights[1, 0] = model.fake_grad(1, [0,1])
+grad_weights[0, 0] 
+
+
+# %%
+# Summing together grad_weights gives the full gradient.
+grad_weights[0] = grad_weights[0] + grad_weights[0, 0]
+
+# %%
+# Now we can call update to the get the new weights and opt_state.
+weights[0], opt_states[0] = model.update(0, weight_grad=grad_weights[0], weight=weights[0], 
+                                         opt_state=opt_states[0])
+weights[1], opt_states[1] = model.update(1, weight_grad=grad_weights[1] + grad_weights[1, 0], 
+                                         weight=weights[1], opt_state=opt_states[1])
+
+
+# %%
+# We can complete the tests by setting these as the final weights and calling check.
+model.set_final_weight(0, weights[0])
+model.set_final_weight(1, weights[1])
+model.check([model])
+draw_group(model.final_weights)
+
+# %%
+# We can view the final outcome of the system as a diagram. 
+# This show the forward and backward passes (numbers of batches) and the updates.
+# The lines on the bottom show the memory that is used at each time step.
+draw([model])
+
+
+# %%
+
+# %% [markdown]
+# ### Puzzle 0 - Standard Training
+#
+# Write a standard (non-distributed) training loop that acts on all the batches and loads all the weights. It should just run forward, loss, backward, and update. Aim for the least amount of max memory used. 
+
+# %%
+def basic(model: Model) -> Model:
+    # Storage on device.
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+
+    # Load in the full weights
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.load_weights(l)
+
+    # Load the input layer activations
+    activations[0] = model.get_activation(range(model.BATCHES))
+
+    ## USER CODE
     # Forward
     for l in range(model.LAYERS):
-        model.activations[l+1] = model.forward(l, model.activations[l])
+        activations[l + 1] = model.forward(l, activations[l], weights[l])
 
     # Backward
-    model.grad_activations[model.LAYERS] = model.loss(model.activations[model.LAYERS])
-
-    for l in range(model.LAYERS-1, -1, -1):
-        model.grad_weights[l], model.grad_activations[l] = model.backward(l, model.activations[l], model.grad_activations[l+1])
-        del model.grad_activations[l+1], model.activations[l]
+    grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
+    del activations[model.LAYERS]
+    
+    for l in range(model.LAYERS - 1, -1, -1):
+        grad_weights[l], grad_activations[l] = model.backward(
+            l, activations[l], grad_activations[l + 1], weights[l]
+        )
+        del grad_activations[l + 1], activations[l]
+    del grad_activations[0]
+    assert len(grad_activations) == 0 and len(activations) ==0
 
     # Update
-    model.update(list(range(model.LAYERS)), model.grad_weights)
-
-    return [model]
-
-async def ddp(model):
-    model.activations[0] = model.get_activation([model.rank])
-    model.load_weights(range(model.LAYERS))
-
-    # Forward
     for l in range(model.LAYERS):
-        model.activations[l+1] = model.forward(l, model.activations[l])
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+    ## END USER CODE
+    
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
+    return model
 
-    # Backward
-    model.grad_activations[model.LAYERS] = model.loss(model.activations[model.LAYERS])
 
-    for l in range(model.LAYERS-1, -1, -1):
-        model.grad_weights[l], model.grad_activations[l] = model.backward(l, model.activations[l], model.grad_activations[l+1])
-        del model.grad_activations[l+1], model.activations[l]
+# %%
+out = basic(Model(layers=2, batches=4, rank=0, dist=Dist(1)))
+draw_group(out.final_weights)
+
+
+
+# %%
+Model.check([out])
+
+# %%
+draw([out])
+
+
+# %% [markdown]
+# ### Puzzle 1 - Gradient Accumulation
+#
+# Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update.
+
+# %%
+def grad_accum(model: Model) -> Model:
+    # Storage on device.
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+
+    # Load in the full weights
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.load_weights(l)
+
+    for r in range(model.BATCHES):
+        # Load the input layer activations
+        activations[0, r] = model.get_activation([r])
+
+        ## USER CODE
+        # Forward
+        for l in range(model.LAYERS):
+            activations[l + 1, r] = model.forward(l, activations[l, r], weights[l])
+
+        # Backward
+        grad_activations[model.LAYERS, r] = model.loss(activations[model.LAYERS, r])
+        del activations[model.LAYERS, r]
+        
+        for l in range(model.LAYERS - 1, -1, -1):
+            grad_weights[l, r], grad_activations[l, r] = model.backward(
+                l, activations[l, r], grad_activations[l + 1, r], weights[l]
+            )
+            del grad_activations[l + 1, r], activations[l,r]
+        del grad_activations[0, r]
+        assert len(grad_activations) == 0 and len(activations) == 0
 
     # Update
-    model.grad_weights = await model.allreduce(model.grad_weights)
-    model.update(list(range(model.LAYERS)), model.grad_weights)
+    for l in range(model.LAYERS):
+        for r in range(1, model.BATCHES):
+            grad_weights[l, 0] = grad_weights[l, 0] + grad_weights[l, r]
+        weights[l], opt_states[l] = \
+            model.update(l, 
+                        grad_weights[l, 0], weights[l], opt_states[l])
 
+    ## User Code
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
     return model
 
 
 
+# %%
+out = grad_accum(Model(layers=2, batches=4, rank=0, dist=Dist(1)))
+draw_group(out.final_weights)
 
-async def pipeline(model):
+# %%
+model.check([out])
+
+# %%
+
+# %% [markdown]
+# ## AllReduce
+
+# %%
+
+# %%
+ranks = 4
+weight_grads = [WeightGrad(0, 1, {i}, ranks) for i in range(ranks)]
+weight_grads[0] + weight_grads[1] + weight_grads[2] + weight_grads[3]
+
+# %%
+async def reduce(model: Model) -> WeightGrad:
+    # Allreduce sums together all the weight grads
+    return await model.allreduce(weight_grads[model.rank], 0)
+
+dist = Dist(ranks)
+out_weight_grads = await asyncio.gather(*[
+    reduce(Model(layers=1, batches=1, rank=i, dist=dist))
+    for i in range(ranks)])
+out_weight_grads[0]
+
+# %% [markdown]
+# ### Puzzle 2 - Distributed Data Parallel
+#
+# Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update.
+
+# %%
+async def ddp(model: Model) -> Model:
+    # Storage on device.
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+    # Load all the activations
+    model.activations[0] = model.get_activation([model.rank])
+
+    # Load in the full weights
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.load_weights(l)
+
+    # Forward
+    for l in range(model.LAYERS):
+        activations[l + 1] = model.forward(l, activations[l], weights[l])
+
+    # Backward
+    grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
+
+    for l in range(model.LAYERS - 1, -1, -1):
+        grad_weights[l], grad_activations[l] = model.backward(
+            l, activations[l], grad_activations[l + 1], weights[l]
+        )
+        del grad_activations[l + 1], activations[l]
+
+    # Update
+    for l in range(model.LAYERS):
+        grad_weights[l] = await model.allreduce(grad_weights[l], l)
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+        model.set_final_weight(l, weights[l])
+    return model
+
+
+# %%
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    ddp(Model(layers=2, batches=ranks, rank=i, dist=dist))
+    for i in range(ranks)])
+draw_group(out[0].final_weights)
+
+# %%
+model.check(out)
+
+# %% [markdown]
+# ## Communication: Allgather Sharding
+
+# %%
+model = Model(layers=2, batches=1, rank=0, dist=Dist(1))
+weight, _ = model.load_weights(0, shard=0, total=4)
+weight
+
+# %%
+weights = [model.load_weights(0, shard=i, total=ranks)[0] for i in range(ranks)]
+weights[0].combine(weights[2])
+
+# %%
+async def mygather(model: Model) -> WeightGrad:
+    # Allreduce sums together all the weight grads
+    return await model.allgather(weights[model.rank])
+
+dist = Dist(ranks)
+out_weights = await asyncio.gather(*[
+    mygather(Model(layers=1, batches=1, rank=i, dist=dist))
+    for i in range(ranks)])
+out_weights[0]
+
+# %% [markdown]
+#
+
+# %% [markdown]
+# ### Puzzle 3: Weight-Sharded Data Parallel
+#
+# Rajbhandari, S., Rasley, J., Ruwase, O., and He,
+# Y. Zero: Memory optimizations toward training trillion parameter models, 2019.
+
+# %%
+async def wsdp(model: Model) -> Model:
+    # Storage on device.
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+
+    # Load all the activations
+    model.activations[0] = model.get_activation([model.rank])
+
+    # Load a shard of the weights for every layer. Load in the full weights
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.load_weights(l, model.rank, model.RANKS) 
+
+    # Forward
+    for l in range(model.LAYERS):        
+        weights[l, 0] = await model.allgather(weights[l])
+        activations[l + 1] = model.forward(l, activations[l], weights[l, 0])
+        del weights[l, 0]
+
+    # Backward
+    grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
+
+    for l in range(model.LAYERS - 1, -1, -1):
+        weights[l, 0] = await model.allgather(weights[l])
+        grad_weights[l], grad_activations[l] = model.backward(
+            l, activations[l], grad_activations[l + 1], weights[l, 0]
+        )
+        del grad_activations[l + 1], activations[l], weights[l, 0]
+
+    # Update
+    for l in range(model.LAYERS):
+        grad_weights[l] = await model.allreduce(grad_weights[l], l)
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+        model.set_final_weight(l, weights[l])
+    return model
+
+# %%
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    wsdp(Model(layers=2, batches=ranks, rank=i, dist=dist))
+    for i in range(ranks)])
+draw_group(out[1].final_weights)
+
+# %%
+model.check(out)
+
+# %% [markdown]
+# ## Communication: Scatter-Reduce
+
+# %% [markdown]
+# Scatter across shards
+# Reduce across batches
+
+# %%
+grad_weight = WeightGrad(0, 1, batches={1}, total_batches=4, 
+                         shards={1}, total=4)
+grad_weight
+
+# %%
+grad_weights = {i: WeightGrad(0, 1, batches={i}, total_batches=4, 
+                         shards={0,1,2,3}, total=4) for i in range(4)}
+grad_weights[2]
+
+# %%
+async def scatterreduce(model: Model) -> WeightGrad:
+    # Allreduce sums together all the weight grads
+    return await model.scatterreduce(grad_weights[model.rank], 0)
+
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    scatterreduce(Model(layers=1, batches=1, rank=i, dist=dist))
+    for i in range(ranks)])
+out[0]
+
+# %%
+
+# %% [markdown]
+# ### Puzzle 4: Fully-Sharded Data Parallel
+
+# %%
+async def fsdp(model: Model) -> Model:
+    # Storage on device.
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+
+    # Load all the activations
+    model.activations[0] = model.get_activation([model.rank])
+
+    # Load a shard of the weights for every layer. Load in the full weights
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.load_weights(l, model.rank, model.RANKS) 
+
+    # Forward
+    for l in range(model.LAYERS):        
+        weights[l, 0] = await model.allgather(weights[l])
+        activations[l + 1] = model.forward(l, activations[l], weights[l, 0])
+        del weights[l, 0]
+
+    # Backward
+    grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
+
+    for l in range(model.LAYERS - 1, -1, -1):
+        weights[l, 0] = await model.allgather(weights[l])
+        grad_weights[l], grad_activations[l] = model.backward(
+            l, activations[l], grad_activations[l + 1], weights[l, 0]
+        )
+        grad_weights[l] = await model.scatterreduce(grad_weights[l], l)
+        del grad_activations[l + 1], activations[l], weights[l, 0]
+
+    # Update
+    for l in range(model.LAYERS):
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+        model.set_final_weight(l, weights[l])
+    return model
+
+
+# %%
+
+# %%
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    fsdp(Model(layers=2, batches=ranks, rank=i, dist=dist))
+    for i in range(ranks)])
+draw_group(out[1].final_weights)
+
+# %%
+model.check(out)
+
+# %% [markdown]
+# ## Communication: Point-to-Point
+
+# %%
+async def talk(model: Model) -> None:
+    if model.rank == 0:
+        await model.pass_to(1, "extra cheese")
+        val = await model.receive()
+        print(val)
+    else:
+        val = await model.receive()
+        print(val)
+        val = await model.pass_to(0, "pizza")
+
+dist = Dist(2)
+result = await asyncio.gather(*[
+    talk(Model(layers=1, batches=1, rank=i, dist=dist))
+    for i in range(2)])
+
+
+# %% [markdown]
+# ### Puzzle 5: Pipeline Parallelism
+
+# %%
+async def pipeline(model: Model) -> Model:
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
     per_rank = model.LAYERS // model.RANKS
     my_layers = list([l + (model.rank * per_rank) for l in range(per_rank)])
-    model.load_weights(my_layers)
+    for l in my_layers:
+        weights[l], opt_states[l] = model.load_weights(l)
 
     if model.rank == 0:
-        model.activations[0] = model.get_activation(range(model.BATCHES))
+        activations[0] = model.get_activation(range(model.BATCHES))
     else:
-        model.activations[my_layers[0]] = await model.receive()
+        activations[my_layers[0]] = await model.receive()
 
     # Forward
     for l in my_layers:
-        model.activations[l+1] = model.forward(l, model.activations[l])
+        activations[l + 1] = model.forward(l, activations[l], weights[l])
 
     # Backward
     if model.rank == model.RANKS - 1:
-        model.grad_activations[model.LAYERS] = model.loss(model.activations[model.LAYERS])
+        grad_activations[model.LAYERS] = model.loss(
+            activations[model.LAYERS]
+        )
     else:
-        await model.pass_to(model.rank + 1, model.activations[l + 1])
-        model.grad_activations[l + 1] = await model.receive()
+        await model.pass_to(model.rank + 1, activations[l + 1])
+        grad_activations[l + 1] = await model.receive()
 
     for l in reversed(my_layers):
-        model.grad_weights[l], model.grad_activations[l] = model.backward(l, model.activations[l], model.grad_activations[l+1])
-        del model.grad_activations[l+1], model.activations[l]
+        grad_weights[l], grad_activations[l] = model.backward(
+            l, activations[l], grad_activations[l + 1], model.weights[l]
+        )
+        del model.grad_activations[l + 1], model.activations[l]
 
     if model.rank != 0:
-        await model.pass_to(model.rank - 1, model.grad_activations[l])
+        await model.pass_to(model.rank - 1, grad_activations[l])
 
     # Update
-    model.update(my_layers, model.grad_weights)
+    for l in my_layers:
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+        model.set_final_weight(l, weights[l])
     return model
 
-async def gpipe(model):
+
+# %%
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    pipeline(Model(layers=8, batches=ranks, rank=i, dist=dist))
+    for i in range(ranks)])
+draw_group(out[1].final_weights)
+
+# %% [markdown]
+# ## Puzzle 6: GPipe
+
+# %%
+async def gpipe(model: Model) -> Model:
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
     per_rank = model.LAYERS // model.RANKS
     my_layers = list([l + (model.rank * per_rank) for l in range(per_rank)])
-    model.load_weights(my_layers)
+    for l in my_layers:
+        weights[l], opt_states[l] = model.load_weights(l)
 
-    for mb in [0, 1]:
+    for mb in range(model.BATCHES):
         # Forward
         if model.rank == 0:
-            model.activations[0, mb] = model.get_activation([mb])
+            activations[0, mb] = model.get_activation([mb])
         else:
-            model.activations[my_layers[0], mb] = await model.receive()
+            activations[my_layers[0], mb] = await model.receive()
 
         for l in my_layers:
-            model.activations[l+1, mb] = model.forward(l, model.activations[l, mb])
+            activations[l + 1, mb] = model.forward(l, activations[l, mb], weights[l])
         if model.rank != model.RANKS - 1:
-            await model.pass_to(model.rank + 1, model.activations[l + 1, mb])
+            await model.pass_to(model.rank + 1, activations[l + 1, mb])
 
-    for mb in [0, 1]:
+    for mb in range(model.BATCHES):
         # Backward
         if model.rank == model.RANKS - 1:
-            model.grad_activations[model.LAYERS, mb] = model.loss(model.activations[model.LAYERS, mb])
+            grad_activations[model.LAYERS, mb] = model.loss(
+                activations[model.LAYERS, mb]
+            )
         else:
-            model.grad_activations[my_layers[-1] + 1, mb] = await model.receive()
+            grad_activations[my_layers[-1] + 1, mb] = await model.receive()
 
         for l in reversed(my_layers):
-            model.grad_weights[l, mb], model.grad_activations[l, mb] = \
-                model.backward(l, model.activations[l, mb], model.grad_activations[l+1, mb])
-            del model.grad_activations[l+1, mb], model.activations[l, mb]
+            grad_weights[l, mb], grad_activations[l, mb] = model.backward(
+                l, activations[l, mb], grad_activations[l + 1, mb], weights[l]
+            )
+            del grad_activations[l + 1, mb], activations[l, mb]
 
         if model.rank != 0:
-            await model.pass_to(model.rank - 1, model.grad_activations[l, mb])
+            await model.pass_to(model.rank - 1, grad_activations[l, mb])
 
     # Update
     for l in reversed(my_layers):
-        model.grad_weights[l] = model.grad_weights[l, 0] + model.grad_weights[l, 1]
-        del  model.grad_weights[l, 0], model.grad_weights[l, 1]
-    model.update(my_layers, model.grad_weights)
+        for mb in range(model.BATCHES):
+            if mb != 0:
+                grad_weights[l] = grad_weights[l] + grad_weights[l, mb]
+            else: 
+                grad_weights[l] = grad_weights[l, 0]
+            del grad_weights[l, mb]
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
+        model.set_final_weight(l, weights[l])
     return model
 
 
+# %%
+dist = Dist(ranks)
+out = await asyncio.gather(*[
+    gpipe(Model(layers=8, batches=ranks, rank=i, dist=dist))
+    for i in range(ranks)])
+draw_group(out[1].final_weights)
 
-async def run():
-    model1 = await basic(Model(0, Dist(1), layers=6, batches=2))
+# %%
+model.check(out)
+draw(out)
+
+# %% [markdown]
+# ### Puzzle 7: Pipeline + FSDP
+
+# %%
+async def pipeline_fsdp(model: Model) -> Model:
+    weights, opt_states, activations, grad_activations, grad_weights = model.storage()
+    per_rank = model.LAYERS // (model.RANKS // 4)
+    my_layers = list([l + ((model.rank % 4)  * per_rank) for l in range(per_rank)])
+    print(my_layers)
+    for l in range(model.LAYERS):
+        weights[l, 0], opt_states[l, 0] = model.load_weights(l, model.rank, model.RANKS)
+
+
+    # Forward
+    for l in range(model.LAYERS):        
+        if l == my_layers[0]:
+            if model.rank % 4 == 0:
+                activations[0] = model.get_activation([model.rank // 4])
+            else:
+                activations[l] = await model.receive()
+    
+        weights[l] = await model.allgather(weights[l, 0])
+        if l in my_layers:
+            activations[l + 1] = model.forward(l, activations[l], weights[l])
+        del weights[l]
+        if l == my_layers[-1]:
+            if model.rank % 4 == 3 :
+                grad_activations[model.LAYERS] = model.loss(
+                    activations[model.LAYERS]
+                )
+            else:
+                await model.pass_to(model.rank + 1, activations[l + 1])
+    # Backward
+
+    for l in reversed(range(model.LAYERS)):
+        if l == my_layers[-1]:
+            if model.rank % 4 != 3:
+                grad_activations[l + 1] = await model.receive()
+    
+        weights[l] = await model.allgather(weights[l, 0])
+        if l in my_layers:
+            grad_weights[l], grad_activations[l] = model.backward(
+                l, activations[l], grad_activations[l + 1], model.weights[l]
+            )
+            del grad_activations[l + 1], activations[l]
+            grad_weights[l] = await model.scatterreduce(grad_weights[l], l)
+        else:
+            grad_weights[l] = await model.scatterreduce(WeightGrad(l, model.LAYERS, frozenset(), model.BATCHES), l)
+        del weights[l]
+        weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l, 0], opt_states[l, 0])
+        model.set_final_weight(l, weights[l])
+
+        if model.rank % 4 != 0 and l == my_layers[0]:
+            await model.pass_to(model.rank - 1, grad_activations[l])
+    # Update
+    return model
+
+# %%
+dist = Dist(16)
+out = await asyncio.gather(*[
+    pipeline_fsdp(Model(layers=8, batches=ranks, rank=i, dist=dist))
+    for i in range(16)])
+
+
+# %%
+model.check(out)
+chalk.set_svg_height(1000)
+chalk.set_svg_draw_height(1000)
+
+draw(out)
+
+# %%
+async def run() -> None:
+    model1 = [basic(Model(0, Dist(1), layers=6, batches=2))]
     Model.check(model1)
 
-    async def main():
+    async def main2() -> List[Model]:
         ranks = 2
         dist = Dist(ranks)
-        return await asyncio.gather(*[ddp(Model(rank, dist, layers=6, batches=2))
-                                      for rank in range(ranks)])
-    model2 = await main()
+        return await asyncio.gather(
+            *[ddp(Model(rank, dist, layers=6, batches=2)) for rank in range(ranks)]
+        )
+
+    model2 = await main2()
     Model.check(model2)
 
-
-    async def main():
+    async def main3() -> List[Model]:
         ranks = 4
         dist = Dist(ranks)
-        return await asyncio.gather(*[pipeline(Model(rank, dist, layers=8, batches=2))
-                                      for rank in range(ranks)])
+        return await asyncio.gather(
+            *[pipeline(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
+        )
 
-    model3 = await main()
+    model3 = await main3()
     Model.check(model3)
 
-
-    async def main():
+    async def main4() -> List[Model]:
         ranks = 4
         dist = Dist(ranks)
-        return await asyncio.gather(*[gpipe(Model(rank, dist, layers=8, batches=2))
-                                      for rank in range(ranks)])
+        return await asyncio.gather(
+            *[gpipe(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
+        )
 
-    model4 = await main()
+    model4 = await main4()
     Model.check(model4)
 
-    set_svg_height(600)
-    set_svg_draw_height(100)
+    async def main5() -> List[Model]:
+        ranks = 2
+        dist = Dist(ranks)
+        return await asyncio.gather(
+            *[fsdp(Model(rank, dist, layers=8, batches=2)) for rank in range(ranks)]
+        )
 
-    vcat([draw(model1), draw(model2), draw(model3), draw(model4)], 0.1).render_svg("out.svg")
-asyncio.run(run())
+    model5 = await main5()
+    Model.check(model5)
 
+
+    vcat([draw(model1), draw(model2), draw(model3), draw(model4)], 0.1).render_svg(
+        "out2.svg", 500
+    )
 
