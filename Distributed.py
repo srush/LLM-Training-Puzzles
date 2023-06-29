@@ -14,15 +14,16 @@
 #     name: python3
 # ---
 
-# %%
-# LLM Training Puzzles
-
-by Sasha Rush ([@srush_nlp](https://twitter.com/srush_nlp))
+# %% [markdown]
+# # LLM Training Puzzles
+#
+# by Sasha Rush ([@srush_nlp](https://twitter.com/srush_nlp))
 
 # %%
 # %%capture
-# # !pip install -qqq git+https://github.com/chalk-diagrams/chalk asyncio
-# # !wget https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/lib.py https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/drawing.py
+# Uncomment to run in Colab
+# !pip install -qqq git+https://github.com/chalk-diagrams/chalk asyncio
+# !wget https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/lib.py https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/drawing.py
 
 # %%
 from typing import List
