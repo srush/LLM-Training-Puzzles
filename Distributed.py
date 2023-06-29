@@ -15,7 +15,14 @@
 # ---
 
 # %%
+# LLM Training Puzzles
+
+by Sasha Rush ([@srush_nlp](https://twitter.com/srush_nlp))
+
+# %%
+# %%capture
 # # !pip install -qqq git+https://github.com/chalk-diagrams/chalk asyncio
+# # !wget https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/lib.py https://raw.githubusercontent.com/srush/LLM-Training-Puzzles/main/drawing.py
 
 # %%
 from typing import List
@@ -26,12 +33,6 @@ import asyncio
 import chalk
 chalk.set_svg_height(400)
 chalk.set_svg_draw_height(600)
-
-# %% [markdown]
-# # LLM Training Puzzles
-#
-# by Sasha Rush (@srush_nlp)
-#
 
 # %% [markdown]
 # ## Preliminaries
