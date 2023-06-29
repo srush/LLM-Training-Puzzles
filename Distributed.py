@@ -15,6 +15,9 @@
 # ---
 
 # %%
+# # !pip install -qqq git+https://github.com/chalk-diagrams/chalk asyncio
+
+# %%
 from typing import List
 from lib import Model, Dist, WeightGrad
 from drawing import draw, draw_group
@@ -50,7 +53,7 @@ weights, opt_states, activations, grad_activations, grad_weights = model.storage
 # * Grad Activations - The gradients of the loss wrt to activations, needed for backward pass
 # * Grad Weights - The gradients of the loss wrt to weights, needed for updates
 #
-# For these puzzles, you are *not allowed* to have local variables. You need to store each of these in the dictionary corresponding to its type.
+# For these puzzles, you are *not allowed* to have local variables. You need to store each of these in the dictionary corresponding to its type.                      
 #
 # We begin by tracing the lifecycle of a single model update.
 
@@ -391,7 +394,7 @@ async def wsdp(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
 
     # Load all the activations
-    model.activations[0] = model.get_activation([mo         del.rank])
+    model.activations[0] = model.get_activation([model.rank])
 
     # Load a shard of the weights for every layer. Load in the full weights
     for l in range(model.LAYERS):
