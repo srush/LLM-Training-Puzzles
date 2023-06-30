@@ -359,8 +359,8 @@ out_weights[0]
 #
 # Run a model that shards each layer weight over all the machines. Reconstruct the layer weight at each layer using allgather. Finally update the weights on each machine using allreduce.
 #
-# * Total Steps: 6
-# * Total Memory: 900000
+# * Total Steps: 20
+# * Total Memory: 2800000
 
 async def wsdp(model: Model) -> Model:
     # Storage on device.
@@ -439,6 +439,11 @@ out[0]
 
 
 # ### Puzzle 4: Fully-Sharded Data Parallel
+#
+# Run a model that shards each layer weight over all the machines. Reconstruct the layer weight at each layer using allgather. Collect the gradients with scatter-reduce.
+#
+# * Total Steps: 20
+# * Total Memory: 2300000
 
 async def fsdp(model: Model) -> Model:
     # Storage on device.
@@ -515,6 +520,9 @@ result = await asyncio.gather(*[
 # ### Puzzle 5: Pipeline Parallelism
 #
 # Split the layer weights and optimizers equally between GPUs. Have each GPU handle only its layer. Pass the full set of batches for activations and grad_activations between layers using p2p communication. No need for any global communication.
+#
+# * Total Steps: 66
+# * Total Memory: 3300000
 
 async def pipeline(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
@@ -576,6 +584,9 @@ model.check(out)
 # A major issue with the pipeline approach is that it causes a "bubble", i.e. time in the later layers waiting for the earlier layers to complete. An alternative approach is to split the batches smaller so you can pass them earlier. 
 #
 # In this puzzle, you should run each batch by itself, and then pass. The graph should look similar as the one above but with a smaller bubble. 
+#
+# * Total Steps: 33
+# * Total Memory: 4100000
 
 async def gpipe(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
@@ -648,6 +659,9 @@ model.check(out)
 # As a last exercise, we can put everything together. Here we are going to run a combination of pipeline parallelism while also sharding our weight between 16 different machines. Here the model only has 4 layers, so we will assign 4 GPUs to each layer in the pipeline parallel approach. 
 #
 # This example requires combining both collective communication and p2p communication effectively. 
+#
+# * Total Steps: 15
+# * Total Memory: 1000000
 
 async def pipeline_fsdp(model: Model) -> Model:
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
