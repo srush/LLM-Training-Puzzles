@@ -80,14 +80,12 @@ grad_weights[1], grad_activations[1] = model.backward(1, activations[1], grad_ac
 grad_weights[0], grad_activations[0] = model.backward(0, activations[0], grad_activations[1], weights[0])
 grad_activations[1]
 
-# +
 # We can use delete to remove any memory that is not longer needed. 
 print("Before memory:", model.memory())
 del grad_activations[1]
 print("After memory:", model.memory())
-
+model.status()
 draw_group(grad_activations)
-# -
 
 # Grad weights keep track of which batches they are for. Here we only have the grad weights for batches 2 and 3.
 draw_group(grad_weights)
@@ -108,11 +106,16 @@ grad_weights[0, 0]
 # Summing together grad_weights gives the full gradient.
 grad_weights[0] = grad_weights[0] + grad_weights[0, 0]
 
+# +
 # Now we can call update to the get the new weights and opt_state.
 weights[0], opt_states[0] = model.update(0, weight_grad=grad_weights[0], weight=weights[0], 
                                          opt_state=opt_states[0])
-weights[1], opt_states[1] = model.update(1, weight_grad=grad_weights[1] + grad_weights[1, 0], 
+
+# WARNING: You need to set all variables. Otherwise they are not counted towards memory.
+grad_weights[1] = grad_weights[1] + grad_weights[1, 0]
+weights[1], opt_states[1] = model.update(1, weight_grad=grad_weights[1],
                                          weight=weights[1], opt_state=opt_states[1])
+# -
 
 
 # We can complete the tests by setting these as the final weights and calling check.
@@ -131,6 +134,9 @@ draw([model])
 # ### Puzzle 0 - Standard Training
 #
 # Write a standard (non-distributed) training loop that acts on all the batches and loads all the weights. It should just run forward, loss, backward, and update. Aim for the least amount of max memory used. 
+#
+# * Target Time:  9 steps
+# * Target Memory: 2600000
 
 def basic(model: Model) -> Model:
     # Storage on device.
@@ -170,12 +176,8 @@ def basic(model: Model) -> Model:
     return model
 
 
-# +
 out = basic(Model(layers=2, batches=4, rank=0, dist=Dist(1)))
 draw_group(out.final_weights)
-
-
-# -
 
 draw([out])
 
@@ -187,8 +189,10 @@ Model.check([out])
 # For this puzzle, the goal is to reduce max memory usage. To do so you are going to run on each batch individually instead of all together. 
 #
 # Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update.
+#
+# * Target Time:  17 steps
+# * Target Memory: 2000000
 
-# +
 def grad_accum(model: Model) -> Model:
     # Storage on device.
     weights, opt_states, activations, grad_activations, grad_weights = model.storage()
@@ -215,25 +219,25 @@ def grad_accum(model: Model) -> Model:
             grad_weights[l, r], grad_activations[l, r] = model.backward(
                 l, activations[l, r], grad_activations[l + 1, r], weights[l]
             )
-            del grad_activations[l + 1, r], activations[l,r]
+            if r == 0:
+                grad_weights[l] = grad_weights[l, r]
+            else:
+                grad_weights[l] = grad_weights[l] + grad_weights[l, r]
+            del grad_activations[l + 1, r], activations[l,r], grad_weights[l, r]
         del grad_activations[0, r]
         assert len(grad_activations) == 0 and len(activations) == 0
 
     # Update
     for l in range(model.LAYERS):
-        for r in range(1, model.BATCHES):
-            grad_weights[l, 0] = grad_weights[l, 0] + grad_weights[l, r]
         weights[l], opt_states[l] = \
             model.update(l, 
-                        grad_weights[l, 0], weights[l], opt_states[l])
+                        grad_weights[l], weights[l], opt_states[l])
 
     ## END USER CODE
     for l in range(model.LAYERS):
         model.set_final_weight(l, weights[l])
     return model
 
-
-# -
 
 out = grad_accum(Model(layers=2, batches=4, rank=0, dist=Dist(1)))
 draw_group(out.final_weights)
@@ -275,6 +279,9 @@ out_weight_grads[0]
 # ### Puzzle 2 - Distributed Data Parallel
 #
 # Write a function with four parts. First run on batches {0} and then {1} etc. Sum the grad weights and then update. The main benefit of this approach is compute efficiency over gradient accumulation.
+#
+# * Total Steps: 5
+# * Total Memory: 1800000
 
 async def ddp(model: Model) -> Model:
     # Storage on device.
@@ -305,9 +312,10 @@ async def ddp(model: Model) -> Model:
     for l in range(model.LAYERS):
         grad_weights[l] = await model.allreduce(grad_weights[l], l)
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
-        model.set_final_weight(l, weights[l])
+        
     ## END USER CODE
-
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
     return model
 
 
@@ -350,6 +358,9 @@ out_weights[0]
 # ### Puzzle 3: Weight-Sharded Data Parallel
 #
 # Run a model that shards each layer weight over all the machines. Reconstruct the layer weight at each layer using allgather. Finally update the weights on each machine using allreduce.
+#
+# * Total Steps: 6
+# * Total Memory: 900000
 
 async def wsdp(model: Model) -> Model:
     # Storage on device.
@@ -383,14 +394,16 @@ async def wsdp(model: Model) -> Model:
     for l in range(model.LAYERS):
         grad_weights[l] = await model.allreduce(grad_weights[l], l)
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
-        model.set_final_weight(l, weights[l])
 
     ## END USER CODE
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
+
     return model
 
 dist = Dist(ranks)
 out = await asyncio.gather(*[
-    wsdp(Model(layers=2, batches=ranks, rank=i, dist=dist))
+    wsdp(Model(layers=6, batches=ranks, rank=i, dist=dist))
     for i in range(ranks)])
 draw_group(out[1].final_weights)
 
@@ -447,7 +460,8 @@ async def fsdp(model: Model) -> Model:
 
     # Backward
     grad_activations[model.LAYERS] = model.loss(activations[model.LAYERS])
-
+    del(activations[model.LAYERS])
+    
     for l in range(model.LAYERS - 1, -1, -1):
         weights[l, 0] = await model.allgather(weights[l], l)
         grad_weights[l], grad_activations[l] = model.backward(
@@ -459,9 +473,10 @@ async def fsdp(model: Model) -> Model:
     # Update
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
-        model.set_final_weight(l, weights[l])
         
     ## END USER CODE
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
     return model
 
 
@@ -539,9 +554,10 @@ async def pipeline(model: Model) -> Model:
     # Update
     for l in my_layers:
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
-        model.set_final_weight(l, weights[l])
-    ## END USER CODE
 
+    ## END USER CODE
+    for l in my_layers:
+        model.set_final_weight(l, weights[l])
     return model
 
 
@@ -608,8 +624,11 @@ async def gpipe(model: Model) -> Model:
                 grad_weights[l] = grad_weights[l, 0]
             del grad_weights[l, mb]
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l], opt_states[l])
-        model.set_final_weight(l, weights[l])
+
     ## END USER CODE
+    for l in my_layers:
+        model.set_final_weight(l, weights[l])
+
     return model
 
 
@@ -680,8 +699,10 @@ async def pipeline_fsdp(model: Model) -> Model:
             await model.pass_to(model.rank - 1, grad_activations[l])
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.update(l, grad_weights[l], weights[l, 0], opt_states[l, 0])
-        model.set_final_weight(l, weights[l])
+
     # END USER CODE
+    for l in range(model.LAYERS):
+        model.set_final_weight(l, weights[l])
     # Update
     return model
 
@@ -697,3 +718,14 @@ chalk.set_svg_height(1000)
 chalk.set_svg_draw_height(1000) 
 
 draw(out)
+# -
+
+# ### When does it make sense to combine?
+#
+# The goal of these exercises is to give you a sense of the different methods out there for distributed training. However, there is not currently a one size fits all approach for distributed training. The right choice will depend on the constants such as batch size, memory per GPU, communication overhead, implementation complexity, model size, and specifics of architecture. 
+#
+# As an example  of what's left to explore, this last method Pipeline + FSDP is often not a great choice due to the complexities of communication speed. And in fact GPipe + FSDP also gets you into a bad place. The paper [Breadth First Pipeline Parallelism](https://arxiv.org/pdf/2211.05953.pdf) proposes instead a combination of pipeline scheduling and communication. Here's what it looks like. 
+
+# ![image.png](attachment:image.png)
+
+#

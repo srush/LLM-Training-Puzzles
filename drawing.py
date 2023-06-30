@@ -11,7 +11,15 @@ def draw(models : Sequence[Model]) -> Diagram:
     TIME = 2
     layers = models[0].LAYERS
     forward_col = list(Color("green").range_to("red", layers + 1))
-
+    MAXTIME = max(m.log[-1].time for m in models)
+    MAXMEM = 0
+    ARGMEM = None
+    for i, m in enumerate(models):
+        for event in m.log:
+            if event.memory > MAXMEM:
+                MAXMEM = event.memory
+                ARGMEM = (i, event.time)
+    print(f"Timesteps: {MAXTIME} \nMaximum Memory: {MAXMEM} at GPU: {ARGMEM[0]} time: {ARGMEM[1]}")
     def square(layer:int, time:int, length:int, s: str="") -> Diagram:
         PAD = 0.2
         return (
@@ -48,8 +56,6 @@ def draw(models : Sequence[Model]) -> Diagram:
 
     rows = []
 
-    MAXTIME = max(m.log[-1].time for m in models)
-
     # Time
     for gpu in range(len(models)):
         d = empty()
@@ -82,12 +88,16 @@ def draw(models : Sequence[Model]) -> Diagram:
         ).translate(-TIME, 0).fill_color(Color("grey"))
         for e in models[gpu].log:
             can = (
-                rectangle(TIME * e.length, e.memory / 100.0)
+                rectangle(TIME * e.length, e.memory / (1.5 * MAXMEM))
                 .align_b()
                 .align_l()
-                .fill_color(Color("black"))
+                .line_width(0)
+                .fill_color(Color("grey"))
             )
             row = row.align_b() + can.translate(TIME * e.time, 0)
+        if gpu == ARGMEM[0]:
+            row = row + rectangle(0.1, 1).translate(TIME * ARGMEM[1], 0).line_color(Color("red")).align_b()
+
         rows.append(row)
     d2 = vcat(rows)
     d = vcat([d, d2])

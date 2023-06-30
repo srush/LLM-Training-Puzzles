@@ -130,7 +130,7 @@ class Weight(Gatherable["Weight"]):
         return Weight(self.layer, self.layers, self.step, self.shards | other.shards, self.total)
 
     def memory(self) -> float:
-        return len(self.shards) / self.total
+        return (len(self.shards) / self.total) * HIDDEN * HIDDEN
 
     def shard(self, shard: int, total: int) -> Weight:
         assert self.is_complete()
@@ -148,6 +148,8 @@ class Weight(Gatherable["Weight"]):
         d = self.draw()
         return (d[0] + d[1])._repr_svg_()
 
+HIDDEN = 512
+LENGTH = 256
 @dataclass
 class Activation:
     """
@@ -159,7 +161,7 @@ class Activation:
     total_batches: int
 
     def memory(self) -> int:
-        return len(self.batches)
+        return len(self.batches) * HIDDEN * LENGTH
 
     def draw(self) -> Diagram:
         from drawing import draw_network
@@ -199,7 +201,7 @@ class WeightGrad(Reduceable["WeightGrad"], Gatherable["WeightGrad"]):
                           self.shards | other.shards, self.total)
 
     def memory(self) -> float:
-        return len(self.batches) * len(self.shards) / self.total
+        return (len(self.shards) / self.total) * HIDDEN * HIDDEN
 
     def shard(self, shard: int, total: int) -> WeightGrad:
         assert self.is_complete(), f"{self.shards} out of {self.total}"
@@ -240,7 +242,7 @@ class OptState(Gatherable["OptState"]):
         return OptState(self.layer, self.layers, self.step, self.shards | other.shards, self.total)
 
     def memory(self) -> float:
-        return len(self.shards) / self.total
+        return HIDDEN * HIDDEN * (len(self.shards) / self.total)
 
     def draw(self) -> Diagram:
         from drawing import draw_network
@@ -264,7 +266,7 @@ class ActivationGrad:
     total_batches: int
 
     def memory(self) -> int:
-        return len(self.batches)
+        return len(self.batches) * HIDDEN * LENGTH
 
     def draw(self) -> Diagram:
         from drawing import draw_network
@@ -315,6 +317,12 @@ class Model:
             for v in d.values():
                 mem += v.memory()
         return mem
+
+    def status(self):
+        for d in list(self.storage()):
+            for k, v in d.items():
+                print(k, type(v), end=",")
+        print()
 
     def event(self, typ: str, layer: Optional[int]=None, batches: FrozenSet[int]=frozenset({})) -> None:
         length = 0
