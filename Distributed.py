@@ -135,7 +135,7 @@ draw([model])
 #
 # Write a standard (non-distributed) training loop that acts on all the batches and loads all the weights. It should just run forward, loss, backward, and update. Aim for the least amount of max memory used. 
 #
-# * Target Time:  9 steps
+# * Target Time:  17 steps
 # * Target Memory: 2600000
 
 def basic(model: Model) -> Model:
@@ -369,7 +369,7 @@ async def wsdp(model: Model) -> Model:
     # Load all the activations
     model.activations[0] = model.get_activation([model.rank])
 
-    # Load a shard of the weights for every layer. Load in the full weights
+    # Load a shard of the weights for every layer. Load in the full optimizer states
     for l in range(model.LAYERS):
         weights[l], opt_states[l] = model.load_weights(l, model.rank, model.RANKS) 
 
