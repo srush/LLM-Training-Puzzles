@@ -121,7 +121,7 @@ weights[1], opt_states[1] = model.update(1, weight_grad=grad_weights[1],
 # We can complete the tests by setting these as the final weights and calling check.
 model.set_final_weight(0, weights[0])
 model.set_final_weight(1, weights[1])
-model.check([model])
+Model.check([model])
 draw_group(model.final_weights)
 
 # We can view the final outcome of the system as a diagram. 
@@ -244,7 +244,7 @@ draw_group(out.final_weights)
 
 draw([out])
 
-model.check([out])
+Model.check([out])
 
 # ## Communications: AllReduce
 
@@ -327,7 +327,7 @@ draw_group(out[0].final_weights)
 
 draw(out)
 
-model.check(out)
+Model.check(out)
 
 # ## Communication: AllGather / Sharding
 #
@@ -409,7 +409,7 @@ draw_group(out[1].final_weights)
 
 draw(out)
 
-model.check(out)
+Model.check(out)
 
 # ## Communication: Scatter-Reduce
 
@@ -493,7 +493,7 @@ draw_group(out[1].final_weights)
 
 draw(out)
 
-model.check(out)
+Model.check(out)
 
 # ## Communication: Point-to-Point
 #
@@ -577,7 +577,7 @@ draw_group(out[1].final_weights)
 
 draw(out)
 
-model.check(out)
+Model.check(out)
 
 # ### Puzzle 6: GPipe Schedule
 #
@@ -651,7 +651,7 @@ draw_group(out[1].final_weights)
 
 draw(out)
 
-model.check(out)
+Model.check(out)
 
 
 # ### Puzzle 7: Pipeline + FSDP
@@ -727,7 +727,7 @@ out = await asyncio.gather(*[
 
 
 # +
-model.check(out)
+Model.check(out)
 chalk.set_svg_height(1000)
 chalk.set_svg_draw_height(1000) 
 
